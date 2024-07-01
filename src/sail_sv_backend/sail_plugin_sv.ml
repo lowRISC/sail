@@ -154,8 +154,11 @@ let verilog_options =
     );
     ("-sv_nomem", Arg.Set opt_nomem, " don't emit a dynamic memory implementation");
     ( "-sv_fun2wires",
-      Arg.String (fun fn -> opt_fun2wires := fn :: !opt_fun2wires),
-      "<functionname> Use input/output ports instead of emitting a function call"
+      Arg.String (fun str ->
+        match String.index_opt str ':' with
+        | Some pos -> opt_fun2wires := (String.sub str (pos + 1) (String.length str - pos - 1), int_of_string (String.sub str 0 pos)) :: !opt_fun2wires
+        | None -> opt_fun2wires := (str, 1) :: !opt_fun2wires),
+      "<slots>:<functionname> Use input/output ports instead of emitting a function call"
     );
     ( "-sv_specialize",
       Arg.Int (fun i -> opt_int_specialize := Some i),
@@ -390,7 +393,7 @@ let verilog_target _ default_sail_dir out_opt ast effect_info env =
     let union_padding = !opt_padding
     let unreachable = !opt_unreachable
     let comb = !opt_comb
-    let ignore = !opt_fun2wires
+    let ignore = List.map (fun (x, y) -> x) !opt_fun2wires
   end) in
   let open SV in
   let sail_dir = Reporting.get_sail_dir default_sail_dir in
@@ -443,7 +446,7 @@ let verilog_target _ default_sail_dir out_opt ast effect_info env =
   let out_doc = out_doc ^^ reg_ref_enums in
   let in_doc = reg_doc ^^ reg_ref_functions ^^ in_doc in
 
-  let mk_wire_fun nm =
+  let mk_wire_fun nm slots =
     let id = mk_id nm in
     match Bindings.find_opt id fn_ctyps with
     | None -> (empty, [], [])
@@ -453,28 +456,32 @@ let verilog_target _ default_sail_dir out_opt ast effect_info env =
         let invoke_flag = string (nm ^ "_sail_invoke") in
         let result = string (nm ^ "_sail_invoke_ret") in
         let arg_out i = string (nm ^ "_sail_invoke_arg_" ^ string_of_int i) in
-        let fun_body =
-          string "if (" ^^ invoke_flag
-          ^^ string ") sail_reached_unreachable = 1;"
-          ^^ hardline ^^ invoke_flag ^^ string " = 1;" ^^ hardline
-          ^^ (arg_nms
-             |> List.mapi (fun i arg -> arg_out i ^^ string " = " ^^ string (string_of_id arg) ^^ semi ^^ hardline)
-             |> separate empty
-             )
-          ^^ string "return " ^^ result ^^ string ";"
+        let slot_index s = string ("[" ^ string_of_int s ^ "]") in
+        let fun_body_slot s =
+          let slot_index = slot_index s in
+          string "if (!" ^^ invoke_flag ^^ slot_index ^^ string ") begin" ^^ nest 4 (
+            hardline ^^ invoke_flag ^^ slot_index ^^ string " = 1;" ^^ hardline
+            ^^ (arg_nms
+               |> List.mapi (fun i arg -> arg_out i ^^ slot_index ^^ string " = " ^^ string (string_of_id arg) ^^ semi ^^ hardline)
+               |> separate empty
+               )
+            ^^ string "return " ^^ result ^^ slot_index ^^ string ";"
+          ) ^^ hardline ^^ string "end" ^^ hardline
         in
+        let fun_body = concat (List.init slots fun_body_slot) ^^ string "sail_reached_unreachable = 1;" in
+        let slot_ranges = string ("[" ^ string_of_int (slots - 1) ^ ":0]") in
         ( sv_fundef_with ctx real_name arg_nms arg_typs ret_ty fun_body ^^ twice hardline,
-          separate space [string "output"; string "bit"; invoke_flag]
-          :: separate space [string "input"; string (fst (sv_ctyp ret_ty)); result]
-          :: List.mapi (fun i typ -> separate space [string "output"; string (fst (sv_ctyp typ)); arg_out i]) arg_typs,
-          [invoke_flag ^^ string " = 0;"]
+          separate space [string "output"; string "bit"; invoke_flag ^^ slot_ranges]
+          :: separate space [string "input"; string (fst (sv_ctyp ret_ty)); result ^^ slot_ranges]
+          :: List.mapi (fun i typ -> separate space [string "output"; string (fst (sv_ctyp typ)); arg_out i ^^ slot_ranges]) arg_typs,
+          List.init slots (fun s -> invoke_flag ^^ slot_index s ^^ string " = 0;")
         )
   in
 
   let wire_funs, wire_fun_ports, wire_invoke_inits =
     List.fold_right
-      (fun nm (code, ports, inits) ->
-        let new_code, new_ports, new_inits = mk_wire_fun nm in
+      (fun (nm, slots) (code, ports, inits) ->
+        let new_code, new_ports, new_inits = mk_wire_fun nm slots in
         (new_code ^^ code, new_ports @ ports, new_inits @ inits)
       )
       !opt_fun2wires (empty, [], [])
