@@ -730,7 +730,7 @@ let mk_typquant qis = TypQ_aux (TypQ_tq qis, Parse_ast.Unknown)
 
 let mk_fexp id exp = FE_aux (FE_fexp (id, exp), no_annot)
 
-type effect = bool
+type effects = bool
 
 let no_effect = false
 let monadic_effect = true
