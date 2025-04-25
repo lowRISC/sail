@@ -469,7 +469,7 @@ let verilog_target _ default_sail_dir out_opt ast effect_info env =
           ) ^^ hardline ^^ string "end" ^^ hardline
         in
         let fun_body = concat (List.init slots fun_body_slot) ^^ string "sail_reached_unreachable = 1;" in
-        let slot_ranges = string ("[" ^ string_of_int (slots - 1) ^ ":0]") in
+        let slot_ranges = string ("[" ^ string_of_int slots ^ "]") in
         ( sv_fundef_with ctx real_name arg_nms arg_typs ret_ty fun_body ^^ twice hardline,
           separate space [string "output"; string "bit"; invoke_flag ^^ slot_ranges]
           :: separate space [string "input"; string (fst (sv_ctyp ret_ty)); result ^^ slot_ranges]
