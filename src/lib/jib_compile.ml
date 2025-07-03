@@ -1074,14 +1074,14 @@ module Make (C : CONFIG) = struct
           [idecl l (CT_fint 64) gs; iblock (setup @ [call (CL_id (gs, CT_fint 64))] @ cleanup)]
         in
 
+
         let loop_start_label = label "for_start_" in
         let loop_end_label = label "for_end_" in
-        let body_setup, body_call, body_cleanup = compile_aexp ctx body in
         let body_gs = ngensym () in
-
         let loop_var = name loop_var in
 
         let loop_body prefix continue =
+          let body_setup, body_call, body_cleanup = compile_aexp ctx body in
           prefix
           @ [
               iblock
