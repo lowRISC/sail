@@ -422,7 +422,7 @@ let verilog_target _ default_sail_dir out_opt ast effect_info env =
   in
 
   let exception_vars =
-    string "bit sail_reached_unreachable;" ^^ hardline ^^ string "bit sail_have_exception;" ^^ hardline
+    string "logic sail_reached_unreachable;" ^^ hardline ^^ string "logic sail_have_exception;" ^^ hardline
     ^^ (if !opt_nostrings then string "sail_unit" else string "string")
     ^^ space ^^ string "sail_throw_location;" ^^ twice hardline
   in
@@ -471,7 +471,7 @@ let verilog_target _ default_sail_dir out_opt ast effect_info env =
         let fun_body = concat (List.init slots fun_body_slot) ^^ string "sail_reached_unreachable = 1;" in
         let slot_ranges = string ("[" ^ string_of_int slots ^ "]") in
         ( sv_fundef_with ctx real_name arg_nms arg_typs ret_ty fun_body ^^ twice hardline,
-          separate space [string "output"; string "bit"; invoke_flag ^^ slot_ranges]
+          separate space [string "output"; string "logic"; invoke_flag ^^ slot_ranges]
           :: separate space [string "input"; string (fst (sv_ctyp ret_ty)); result ^^ slot_ranges]
           :: List.mapi (fun i typ -> separate space [string "output"; string (fst (sv_ctyp typ)); arg_out i ^^ slot_ranges]) arg_typs,
           List.init slots (fun s -> invoke_flag ^^ slot_index s ^^ string " = 0;")

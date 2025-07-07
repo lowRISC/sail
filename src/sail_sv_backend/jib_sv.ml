@@ -145,7 +145,7 @@ module Make (Config : CONFIG) = struct
   let simple_type str = (str, None)
 
   let rec sv_ctyp = function
-    | CT_bool -> simple_type "bit"
+    | CT_bool -> simple_type "logic"
     | CT_bit -> simple_type "logic"
     | CT_fbits width -> ksprintf simple_type "logic [%d:0]" (width - 1)
     | CT_sbits max_width ->
