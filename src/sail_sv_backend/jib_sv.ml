@@ -284,11 +284,6 @@ module Make (Config : CONFIG) = struct
              )
         ^^ space ^^ sv_type_id id ^^ semi
     | CTD_variant (id, ctors) ->
-        let exception_boilerplate =
-          if Id.compare id (mk_id "exception") = 0 then
-            twice hardline ^^ ksprintf string "%s sail_current_exception;" (sv_type_id_string id)
-          else empty
-        in
         let kind_id (id, _) = string_of_id id |> Util.zencode_string |> String.uppercase_ascii |> string in
         let sv_ctor (id, ctyp) = wrap_type ctyp (sv_id id) in
         let tag_type = string ("sailtag_" ^ sv_id_string id) in
@@ -442,7 +437,6 @@ module Make (Config : CONFIG) = struct
                ]
           ^^ twice hardline
           ^^ separate (twice hardline) constructors
-          ^^ exception_boilerplate
         )
         else (
           let constructors =
@@ -483,7 +477,6 @@ module Make (Config : CONFIG) = struct
             ]
           ^^ twice hardline
           ^^ separate (twice hardline) constructors
-          ^^ exception_boilerplate
         )
 
   let sv_signed x = string "signed'" ^^ parens x
