@@ -158,6 +158,12 @@ module type CONFIG = sig
      for debugging C but we want to turn it off for SMT generation
      where we can't use strings *)
   val track_throw : bool
+
+  (* If false then cleanup code may be omitted *)
+  val needs_cleanup : bool
+
+  (* If true, then exceptions become assertions for unreachability *)
+  val unreach_exceptions : bool
 end
 
 module IdGraph : sig

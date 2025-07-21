@@ -105,16 +105,17 @@ let rec flatten_instrs = function
       let fid = flat_id () in
       I_aux (I_init (ctyp, fid, cval), aux) :: flatten_instrs (instrs_rename decl_id fid instrs)
   | I_aux ((I_block block | I_try_block block), _) :: instrs -> flatten_instrs block @ flatten_instrs instrs
-  | I_aux (I_if (cval, then_instrs, else_instrs, _), (_, l)) :: instrs ->
-      let then_label = label "then_" in
-      let endif_label = label "endif_" in
-      [ijump l cval then_label]
-      @ flatten_instrs else_instrs
-      @ [igoto endif_label]
-      @ [ilabel then_label]
-      @ flatten_instrs then_instrs
-      @ [ilabel endif_label]
-      @ flatten_instrs instrs
+  | I_aux (I_if (cval, then_instrs, else_instrs, t), a) :: instrs ->
+    I_aux (I_if (cval, flatten_instrs then_instrs, flatten_instrs else_instrs, t), a) :: flatten_instrs instrs
+      (* let then_label = label "then_" in *)
+      (* let endif_label = label "endif_" in *)
+      (* [ijump l cval then_label] *)
+      (* @ flatten_instrs else_instrs *)
+      (* @ [igoto endif_label] *)
+      (* @ [ilabel then_label] *)
+      (* @ flatten_instrs then_instrs *)
+      (* @ [ilabel endif_label] *)
+      (* @ flatten_instrs instrs *)
   | I_aux (I_comment _, _) :: instrs -> flatten_instrs instrs
   | instr :: instrs -> instr :: flatten_instrs instrs
   | [] -> []

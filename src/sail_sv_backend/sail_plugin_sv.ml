@@ -70,6 +70,7 @@ open Libsail
 
 open Ast
 open Ast_util
+open Ast_defs
 open Jib
 open Jib_compile
 open Jib_util
@@ -77,6 +78,7 @@ open Value2
 open PPrint
 open Printf
 open Smt_exp
+open Type_check
 
 open Generate_primop
 
@@ -320,12 +322,33 @@ module Verilog_config (C : JIB_CONFIG) : Jib_compile.CONFIG = struct
   let track_throw = true
   let branch_coverage = None
   let use_real = false
+  let needs_cleanup = false
+  let unreach_exceptions = true
 end
 
 let register_types cdefs =
   List.fold_left
     (fun acc cdef -> match cdef with CDEF_aux (CDEF_register (id, ctyp, _), _) -> Bindings.add id ctyp acc | _ -> acc)
     Bindings.empty cdefs
+
+(* deftranslate_ast : ctx -> Type_check.typed_ast *)
+let translate_ast : ctx -> typed_ast -> document =
+  fun ctx ast ->
+    List.fold_left (fun doc def ->
+      doc ^^ match def with
+        | DEF_aux (DEF_fundef (FD_aux (FD_function (_, _, d), (_, annot))), a) ->
+          let typ = Option.get (destruct_tannot annot) in
+          (* print_string "OK"; *)
+          List.fold_left (fun doc def ->
+          (* pp_of_ast def; *)
+          doc ^^ match def with
+            | FCL_aux (FCL_funcl (name, Pat_aux (Pat_exp (pat, exp), _)), _) -> string "function automatic" ^^ empty ^^ string (string_of_id name)
+            | _ -> empty
+          ) empty d
+        | _ -> empty
+    ) empty ast.defs
+    (* let y : def = 3 in *)
+    (* string "" *)
 
 let jib_of_ast make_call_precise env ast effect_info =
   let open Jib_compile in
@@ -334,7 +357,9 @@ let jib_of_ast make_call_precise env ast effect_info =
   end)) in
   let env, effect_info = add_special_functions env effect_info in
   let ctx = initial_ctx env effect_info in
+  (* let x = translate_ast ctx ast in *)
   Jibc.compile_ast ctx ast
+  (* translate_ast ctx ast *)
 
 let wrap_module pre mod_name ins_outs doc =
   pre ^^ hardline ^^ string "module" ^^ space ^^ string mod_name

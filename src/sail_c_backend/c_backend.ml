@@ -593,6 +593,8 @@ end) : CONFIG = struct
   let use_real = false
   let branch_coverage = Opts.branch_coverage
   let track_throw = true
+  let needs_cleanup = true
+  let unreach_exceptions = false
 end
 
 (** Functions that have heap-allocated return types are implemented by

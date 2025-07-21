@@ -258,6 +258,8 @@ module type CONFIG = sig
   val use_real : bool
   val branch_coverage : out_channel option
   val track_throw : bool
+  val needs_cleanup : bool
+  val unreach_exceptions : bool
 end
 
 module IdGraph = Graph.Make (Id)
@@ -727,6 +729,126 @@ module Make (C : CONFIG) = struct
       end
     | AP_nil _ -> ([ijump l (V_call (Bnot, [V_call (List_is_empty, [cval])])) case_label], [], [], ctx)
 
+  let rec compile_match_no_jump ctx (AP_aux (apat_aux, env, l)) cval =
+    let ctx = { ctx with local_env = env } in
+    let ctyp = cval_ctyp cval in
+    match apat_aux with
+    | AP_global (pid, typ) ->
+        let global_ctyp = ctyp_of_typ ctx typ in
+        ([
+          (None, [icopy l (CL_id (name pid, global_ctyp)) cval], [])
+        ], ctx)
+    | AP_id (pid, _) when is_ct_enum ctyp -> begin
+        match Env.lookup_id pid ctx.tc_env with
+        | Unbound _ -> ([
+            (None, [idecl l ctyp (name pid); icopy l (CL_id (name pid, ctyp)) cval], [])
+          ], ctx)
+        | _ -> ([
+            (Some (V_call (Neq, [V_id (name pid, ctyp); cval])), [], [])
+          ], ctx)
+      end
+    | AP_id (pid, typ) ->
+        let id_ctyp = ctyp_of_typ ctx typ in
+        let ctx = { ctx with locals = Bindings.add pid (Immutable, id_ctyp) ctx.locals } in
+        ([
+          None, [idecl l id_ctyp (name pid); icopy l (CL_id (name pid, id_ctyp)) cval], [iclear id_ctyp (name pid)]
+        ], ctx)
+    | AP_as (apat, id, typ) ->
+        let id_ctyp = ctyp_of_typ ctx typ in
+        let steps, ctx = compile_match_no_jump ctx apat cval in
+        let ctx = { ctx with locals = Bindings.add id (Immutable, id_ctyp) ctx.locals } in
+        (
+          steps @ [(
+            None, [idecl l id_ctyp (name id); icopy l (CL_id (name id, id_ctyp)) cval], [iclear id_ctyp (name id)]
+          )], ctx
+        )
+    | AP_struct (afpats, _) -> begin
+        let fold (steps, ctx) (field, apat) =
+          let steps', ctx = compile_match_no_jump ctx apat (V_field (cval, field)) in
+          (steps @ steps', ctx)
+        in
+        List.fold_left fold ([], ctx) afpats
+      end
+    | AP_tuple apats -> begin
+        let get_tup n = V_tuple_member (cval, List.length apats, n) in
+        let fold (steps, n, ctx) apat ctyp =
+          let steps', ctx = compile_match_no_jump ctx apat (get_tup n) in
+          (steps @ steps', n + 1, ctx)
+        in
+        match ctyp with
+        | CT_tup ctyps ->
+            let steps, _, ctx = List.fold_left2 fold ([], 0, ctx) apats ctyps in
+            (steps, ctx)
+        | _ -> Reporting.unreachable l __POS__ ("AP_tuple with ctyp " ^ string_of_ctyp ctyp)
+      end
+    | AP_app (ctor, apat, variant_typ) -> begin
+        match ctyp with
+        | CT_variant (var_id, ctors) ->
+            let pat_ctyp = apat_ctyp ctx apat in
+            (* These should really be the same, something has gone wrong if they are not. *)
+            if not (ctyp_equal (cval_ctyp cval) (ctyp_of_typ ctx variant_typ)) then
+              raise
+                (Reporting.err_general l
+                   (Printf.sprintf "When compiling constructor pattern, %s should have the same type as %s"
+                      (string_of_ctyp (cval_ctyp cval))
+                      (string_of_ctyp (ctyp_of_typ ctx variant_typ))
+                   )
+                );
+            let unifiers, ctor_ctyp =
+              let generic_ctors = Bindings.find var_id ctx.variants |> snd |> Bindings.bindings in
+              let unifiers =
+                ctyp_unify l (CT_variant (var_id, generic_ctors)) (cval_ctyp cval) |> KBindings.bindings |> List.map snd
+              in
+              match List.find_opt (fun (id, ctyp) -> Id.compare id ctor = 0 && is_polymorphic ctyp) generic_ctors with
+              | Some (_, poly_ctor_ctyp) ->
+                  let instantiated_parts = KBindings.map ctyp_suprema (ctyp_unify l poly_ctor_ctyp pat_ctyp) in
+                  (unifiers, subst_poly instantiated_parts poly_ctor_ctyp)
+              | None -> begin
+                  match List.find_opt (fun (id, _) -> Id.compare id ctor = 0) ctors with
+                  | Some (_, ctor_ctyp) -> (unifiers, ctor_ctyp)
+                  | None ->
+                      Reporting.unreachable l __POS__
+                        ("Expected constructor " ^ string_of_id ctor ^ " for " ^ full_string_of_ctyp ctyp)
+                end
+            in
+            let steps, ctx =
+              compile_match_no_jump ctx apat (V_ctor_unwrap (cval, (ctor, unifiers), ctor_ctyp))
+            in
+            (
+              (
+                Some (V_ctor_kind (cval, (ctor, unifiers), pat_ctyp)), [], []
+              ) :: steps, ctx
+            )
+        | ctyp ->
+            raise
+              (Reporting.err_general l
+                 (Printf.sprintf "Variant constructor %s : %s matching against non-variant type %s : %s"
+                    (string_of_id ctor) (string_of_typ variant_typ) (string_of_cval cval) (string_of_ctyp ctyp)
+                 )
+              )
+      end
+    | AP_wild _ -> ([], ctx)
+    | AP_cons (hd_apat, tl_apat) -> begin
+        match ctyp with
+        | CT_list ctyp ->
+            let hd, ctx = compile_match_no_jump ctx hd_apat (V_call (List_hd, [cval])) in
+            let tl, ctx = compile_match_no_jump ctx tl_apat (V_call (List_tl, [cval])) in
+          ((Some (V_call (List_is_empty, [cval])), [], []) :: hd @ tl, ctx)
+        | _ -> raise (Reporting.err_general l "Tried to pattern match cons on non list type")
+      end
+    | AP_nil _ -> ([
+        (Some (V_call (Bnot, [V_call (List_is_empty, [cval])])), [], [])
+      ], ctx)
+
+  let compile_match_if_else ctx a cval l tcase =
+    let steps, ctx = compile_match_no_jump ctx a cval in
+    let rec fold steps = match steps with
+      | [] -> tcase
+      | (Some cond, ds, cl) :: steps -> [iif l (V_call (Bnot, [cond])) (ds @ fold steps @ cl) [] CT_unit]
+      | (None, ds, cl) :: steps -> ds @ fold steps @ cl
+    in
+      (fold steps, ctx)
+
   let unit_cval = V_lit (VL_unit, CT_unit)
 
   let rec compile_alexp ctx alexp =
@@ -768,9 +890,8 @@ module Make (C : CONFIG) = struct
         let branch_id, on_reached = coverage_branch_reached ctx l in
         let case_return_id = ngensym () in
         let finish_match_label = label "finish_match_" in
-        let compile_case (apat, guard, body) =
-          let case_label = label "case_" in
-          if is_dead_aexp body then [ilabel case_label]
+        let compile_case_else (apat, guard, body) next =
+          if is_dead_aexp body then next
           else (
             let trivial_guard =
               match guard with
@@ -779,36 +900,41 @@ module Make (C : CONFIG) = struct
                   true
               | _ -> false
             in
-            let pre_destructure, destructure, destructure_cleanup, ctx = compile_match ctx apat cval case_label in
             let guard_setup, guard_call, guard_cleanup = compile_aexp ctx guard in
             let body_setup, body_call, body_cleanup = compile_aexp ctx body in
-            let gs = ngensym () in
+            let matched = ngensym () in
+            let tcase =
+                if not trivial_guard then
+                  guard_setup @ [guard_call (CL_id (matched, CT_bool))] @ guard_cleanup @
+                  [
+                    iif l (V_id (matched, CT_bool))
+                      (body_setup @ [body_call (CL_id (case_return_id, ctyp))] @ body_cleanup)
+                      []
+                      CT_unit
+                  ]
+                else
+                  [icopy l (CL_id (matched, CT_bool)) (V_lit (VL_bool true, CT_bool))] @ body_setup @ [body_call (CL_id (case_return_id, ctyp))] @ body_cleanup
+              in
+            let check, ctx = compile_match_if_else ctx apat cval l tcase in
             let case_instrs =
-              pre_destructure @ destructure
-              @ ( if not trivial_guard then
-                    guard_setup
-                    @ [idecl l CT_bool gs; guard_call (CL_id (gs, CT_bool))]
-                    @ guard_cleanup
-                    @ [
-                        iif l (V_call (Bnot, [V_id (gs, CT_bool)])) (destructure_cleanup @ [igoto case_label]) [] CT_unit;
-                      ]
-                  else []
-                )
-              @ (if num_cases > 1 then coverage_branch_target_taken ctx branch_id body else [])
-              @ body_setup
-              @ [body_call (CL_id (case_return_id, ctyp))]
-              @ body_cleanup @ destructure_cleanup
-              @ [igoto finish_match_label]
+              [
+                idecl l CT_bool matched;
+                icopy l (CL_id (matched, CT_bool)) (V_lit (VL_bool false, CT_bool))
+              ] @ check @ [
+                iif l (V_call (Bnot, [V_id (matched, CT_bool)]))
+                  next
+                  []
+                  CT_unit
+              ]
             in
-            [iblock case_instrs; ilabel case_label]
+              case_instrs
           )
         in
         ( aval_setup
           @ [icomment ("Case with num_cases: " ^ string_of_int num_cases)]
           @ (if num_cases > 1 then on_reached else [])
           @ [idecl l ctyp case_return_id]
-          @ List.concat (List.map compile_case cases)
-          @ [imatch_failure l]
+          @ (List.fold_right compile_case_else cases [imatch_failure l])
           @ [ilabel finish_match_label],
           (fun clexp -> icopy l clexp (V_id (case_return_id, ctyp))),
           [iclear ctyp case_return_id] @ aval_cleanup
@@ -1031,8 +1157,10 @@ module Make (C : CONFIG) = struct
         (return_setup @ creturn, (fun clexp -> icomment "unreachable after return"), [])
     | AE_throw (aval, typ) ->
         (* Cleanup info will be handled by fix_exceptions *)
-        let throw_setup, cval, _ = compile_aval l ctx aval in
-        (throw_setup @ [ithrow l cval], (fun clexp -> icomment "unreachable after throw"), [])
+        if C.unreach_exceptions then ([imatch_failure l], (fun clexp -> icomment "unreachable after throw"), [])
+        else
+          let throw_setup, cval, _ = compile_aval l ctx aval in
+          (throw_setup @ [ithrow l cval], (fun clexp -> icomment "unreachable after throw"), [])
     | AE_exit (aval, typ) ->
         let exit_setup, cval, _ = compile_aval l ctx aval in
         (exit_setup @ [iexit l], (fun clexp -> icomment "unreachable after exit"), [])
@@ -1086,21 +1214,24 @@ module Make (C : CONFIG) = struct
           @ [
               iblock
                 ([
-                   ijump l
-                     (V_call ((if is_inc then Igt else Ilt), [V_id (loop_var, CT_fint 64); V_id (to_gs, CT_fint 64)]))
-                     loop_end_label;
+                   iif l
+                    (V_call (Bnot, [V_call ((if is_inc then Igt else Ilt), [V_id (loop_var, CT_fint 64); V_id (to_gs, CT_fint 64)])]))
+                    (
+                      body_setup
+                      @ [body_call (CL_id (body_gs, CT_unit))]
+                      @ body_cleanup
+                      @ [
+                          icopy l
+                            (CL_id (loop_var, CT_fint 64))
+                            (V_call
+                               ((if is_inc then Iadd else Isub), [V_id (loop_var, CT_fint 64); V_id (step_gs, CT_fint 64)])
+                            );
+                        ]
+                      @ continue ()
+                    )
+                    []
+                    CT_unit
                  ]
-                @ body_setup
-                @ [body_call (CL_id (body_gs, CT_unit))]
-                @ body_cleanup
-                @ [
-                    icopy l
-                      (CL_id (loop_var, CT_fint 64))
-                      (V_call
-                         ((if is_inc then Iadd else Isub), [V_id (loop_var, CT_fint 64); V_id (step_gs, CT_fint 64)])
-                      );
-                  ]
-                @ continue ()
                 );
             ]
         in
@@ -1461,9 +1592,9 @@ module Make (C : CONFIG) = struct
       @ [call (CL_id (return, ret_ctyp))]
       @ cleanup @ destructure_cleanup @ arg_cleanup
     in
-    let instrs = fix_early_return (exp_loc exp) (CL_id (return, ret_ctyp)) instrs in
+    let instrs = if C.needs_cleanup then fix_early_return (exp_loc exp) (CL_id (return, ret_ctyp)) instrs else instrs @ [iend def_annot.loc] in
     let instrs = unique_names instrs in
-    let instrs = fix_exception ~return:(Some ret_ctyp) ctx instrs in
+    let instrs = if C.unreach_exceptions then instrs else fix_exception ~return:(Some ret_ctyp) ctx instrs in
     let instrs = coverage_function_entry ctx id (exp_loc exp) @ instrs in
 
     if Option.is_some debug_attr then (

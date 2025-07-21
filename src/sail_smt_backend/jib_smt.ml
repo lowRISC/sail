@@ -1557,6 +1557,8 @@ end) : Jib_compile.CONFIG = struct
   let use_real = true
   let branch_coverage = None
   let track_throw = false
+  let needs_cleanup = false
+  let unreach_exceptions = false
 end
 
 (**************************************************************************)

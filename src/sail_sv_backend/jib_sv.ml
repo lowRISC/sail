@@ -743,8 +743,13 @@ module Make (Config : CONFIG) = struct
     | I_raw s -> return (string s ^^ semi)
     | I_undefined ctyp ->
         Reporting.unreachable l __POS__ "Unreachable instruction should not reach SystemVerilog backend"
-    | I_jump _ | I_goto _ | I_label _ ->
-        Reporting.unreachable l __POS__ "Non-structured control flow should not reach SystemVerilog backend"
+    | I_jump (_, lab) ->
+      return (string "/* conditional jump to " ^^ string lab ^^ string " */")
+    | I_goto lab ->
+      return (string "/* jump to " ^^ string lab ^^ string " */")
+        (* Reporting.unreachable l __POS__ "Non-structured control flow should not reach SystemVerilog backend" *)
+    | I_label lab ->
+        return (string "/* label: " ^^ string lab ^^ string " */")
     | I_throw _ | I_try_block _ ->
         Reporting.unreachable l __POS__ "Exception handling should not reach SystemVerilog backend"
     | I_clear _ | I_reset _ | I_reinit _ ->
@@ -787,11 +792,12 @@ module Make (Config : CONFIG) = struct
 
   let filter_clear = filter_instrs (function I_aux (I_clear _, _) -> false | _ -> true)
 
-  let variable_decls_to_top instrs =
+  let rec variable_decls_to_top instrs =
     let decls, others =
       List.fold_left
         (fun (decls, others) instr ->
           match instr with
+          | I_aux (I_if (cval, tcase, fcase, t), a) -> (decls, I_aux (I_if (cval, variable_decls_to_top tcase, variable_decls_to_top fcase, t), a) :: others)
           | I_aux (I_decl (ctyp, id), (_, l)) -> (idecl l ctyp id :: decls, others)
           | I_aux (I_init (ctyp, id, cval), (_, l)) ->
               (idecl l ctyp id :: decls, icopy l (CL_id (id, ctyp)) cval :: others)
@@ -920,8 +926,12 @@ module Make (Config : CONFIG) = struct
         else (
           let body =
             Jib_optimize.(
-              body |> flatten_instrs |> remove_dead_code |> variable_decls_to_top |> structure_control_flow_block
-              |> remove_undefined |> filter_clear
+              body
+              |> flatten_instrs
+              |> remove_dead_code
+              |> remove_undefined
+              |> filter_clear
+              |> variable_decls_to_top
             )
           in
           begin
