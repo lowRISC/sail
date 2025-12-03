@@ -312,9 +312,10 @@ let smt_conversion ctx from_ctyp to_ctyp x =
       Fn ("Bits", [bvint ctx.lbits_index (Big_int.of_int n); unsigned_size ctx (lbits_size ctx) n x])
   | CT_fvector _, CT_vector _ -> x
   | CT_vector _, CT_fvector _ -> x
-  | _, _ ->
-      failwith
-        (Printf.sprintf "Cannot perform conversion from %s to %s" (string_of_ctyp from_ctyp) (string_of_ctyp to_ctyp))
+  | _, _ -> x
+  (* | _, _ -> *)
+      (* failwith *)
+        (* (Printf.sprintf "Cannot perform conversion from %s to %s" (string_of_ctyp from_ctyp) (string_of_ctyp to_ctyp)) *)
 
 (* Translate Jib literals into SMT *)
 let smt_value ctx vl ctyp =
@@ -744,7 +745,8 @@ let builtin_append ctx v1 v2 ret_ctyp =
       let x = Fn ("contents", [smt1]) in
       let shift = Fn ("concat", [bvzero (lbits_size ctx - ctx.lbits_index); Fn ("len", [smt2])]) in
       unsigned_size ctx n (lbits_size ctx) (bvor (bvshl x shift) (Fn ("contents", [smt2])))
-  | _ -> builtin_type_error ctx "append" [v1; v2] (Some ret_ctyp)
+  | _ -> Fn ("append_todo", [])
+  (* | _ -> builtin_type_error ctx "append" [v1; v2] (Some ret_ctyp) *)
 
 let builtin_length ctx v ret_ctyp =
   match (cval_ctyp v, ret_ctyp) with
@@ -838,7 +840,8 @@ let builtin_vector_update_subrange ctx vec i j x ret_ctyp =
       let len = bvadd (bvadd i' (bvneg j')) (bvint n (Big_int.of_int 1)) in
       let mask = bvshl (fbits_mask ctx n len) j' in
       bvor (bvand (smt_cval ctx vec) (bvnot mask)) (bvand (bvshl x' j') mask)
-  | _ -> builtin_type_error ctx "vector_update_subrange" [vec; i; j; x] (Some ret_ctyp)
+  (* | _ -> builtin_type_error ctx "vector_update_subrange" [vec; i; j; x] (Some ret_ctyp) *)
+  | _ -> Fn ("vector_update_subrange_todo", [])
 
 let builtin_unsigned ctx v ret_ctyp =
   match (cval_ctyp v, ret_ctyp) with

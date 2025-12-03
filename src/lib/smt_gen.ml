@@ -805,7 +805,8 @@ module Make (Config : CONFIG) (Primop_gen : PRIMOP_GEN) = struct
       let shift = Fn ("concat", [bvzero (lbits_size ctx - ctx.lbits_index); Fn ("len", [smt2])]) in
       unsigned_size ctx n (lbits_size ctx) (bvor (bvshl x shift) (Fn ("contents", [smt2])))
            *)
-    | _ -> builtin_type_error "append" [v1; v2] (Some ret_ctyp)
+    | _ -> return (Fn ("append_todo", []))
+    (* | _ -> builtin_type_error "append" [v1; v2] (Some ret_ctyp) *)
 
   let builtin_sail_truncate v1 v2 ret_ctyp =
     match (cval_ctyp v1, cval_ctyp v2, ret_ctyp) with
