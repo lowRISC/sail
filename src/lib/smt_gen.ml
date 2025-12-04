@@ -449,6 +449,12 @@ module Make (Config : CONFIG) (Primop_gen : PRIMOP_GEN) = struct
     | CT_fbits n, CT_lbits ->
         let* x = unsigned_size ~into:lbits_size ~from:n x in
         return (Fn ("Bits", [bvint lbits_index (Big_int.of_int n); x]))
+    | CT_vector elem_ctyp, CT_fvector (len, elem_ctyp') when ctyp_equal elem_ctyp elem_ctyp' ->
+        (* Vector to fixed vector conversion - assume lengths match *)
+        return x
+    | CT_fvector (len, elem_ctyp), CT_vector elem_ctyp' when ctyp_equal elem_ctyp elem_ctyp' ->
+        (* Fixed vector to vector conversion *)
+        return x
     | _, _ ->
         let* l = current_location in
         Reporting.unreachable l __POS__
@@ -1018,6 +1024,15 @@ module Make (Config : CONFIG) (Primop_gen : PRIMOP_GEN) = struct
         let contents = bvor (bvand bv (bvnot mask)) (bvand (bvshl x j) mask) in
         let* index = signed_size ~into:lbits_index ~from:sz len in
         return (Fn ("Bits", [index; contents]))
+    | bv_ctyp, ctyp_i, ctyp_j, ctyp_x, CT_fbits n ->
+        let* sz, bv = fmap (to_fbits bv_ctyp) (smt_cval vec) in
+        let* i = bind (smt_cval i) (signed_size ~into:sz ~from:(int_size ctyp_i)) in
+        let* j = bind (smt_cval j) (signed_size ~into:sz ~from:(int_size ctyp_j)) in
+        let* x = bind (smt_cval x) (smt_conversion ~into:(CT_fbits sz) ~from:ctyp_x) in
+        let len = bvadd (bvadd i (bvneg j)) (bvpint sz (Big_int.of_int 1)) in
+        let mask = bvshl (fbits_mask sz len) j in
+        let contents = bvor (bvand bv (bvnot mask)) (bvand (bvshl x j) mask) in
+        smt_conversion ~into:(CT_fbits n) ~from:(CT_fbits sz) contents
     | _ -> builtin_type_error "vector_update_subrange" [vec; i; j; x] (Some ret_ctyp)
 
   let builtin_get_slice_int v1 v2 v3 ret_ctyp =
@@ -1051,6 +1066,18 @@ module Make (Config : CONFIG) (Primop_gen : PRIMOP_GEN) = struct
         let* v = smt_cval v in
         (* TODO: Check we haven't shifted too far *)
         return (bvshl (bvone lint_size) v)
+    | CT_fint sz, CT_fint ret_sz ->
+        let* v = smt_cval v in
+        let* v = signed_size ~into:ret_sz ~from:sz v in
+        return (bvshl (bvone ret_sz) v)
+    | CT_fint sz, CT_lint ->
+        let* v = smt_cval v in
+        let* v = signed_size ~into:lint_size ~from:sz v in
+        return (bvshl (bvone lint_size) v)
+    | CT_lint, CT_fint ret_sz ->
+        let* v = smt_cval v in
+        let* v = signed_size ~into:ret_sz ~from:lint_size v in
+        return (bvshl (bvone ret_sz) v)
     | _ -> builtin_type_error "pow2" [v] (Some ret_ctyp)
 
   (* Technically, there's no bvclz in SMTLIB, but we can't generate
